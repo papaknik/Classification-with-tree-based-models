@@ -1,0 +1,1222 @@
+---
+title: "**CLASSIFICATION WITH TREE-BASED MODELS**"
+author: "Papakostas Nikos"
+date: "2024-03-30"
+output: 
+  html_document: 
+    toc: true
+    toc_float: true
+    collapsed: true
+    smooth_scroll: true
+    highlight: tango
+    theme: readable
+    df_print: default
+    code_folding: show
+---
+
+```{=html}
+<style>
+  h1.title {
+    font-size: 24px;
+    color : #8A7FCD;
+}
+  h4.author {
+    font-size: 11px;
+    color : #8A7FCD;
+}
+  h4.date {
+    font-size: 11px;
+    color : #8A7FCD;
+}
+  h2 {
+    font-size: 20px;
+    color : #8A7FCD;
+}
+  h3 {
+    font-size: 18px;
+    color : #8A7FCD;
+}
+  #TOC {
+    color : #8A7FCD;
+    border-color : #8A7FCD;
+    background-color : #8A7FCD; 
+    font-size : 12px;
+}
+</style>
+```
+
+```{r setup, include=FALSE,cols.print=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, error = FALSE, fig.align = 'center', comment = '', collapse = TRUE, tidy.opts = 'formatR')
+library(rmarkdown)
+library(knitr) 
+library(kableExtra)
+```
+
+## PROJECT UNDERSTANDING PHASE
+
+In this small practice project, we will perform data analysis in a dataset named ‘PimaIndiansDiabetes2’, that is available with the R package “mlbench”.
+
+The dataset consists of 768 female Indian patients above 21 years old, along with eight(8) individual characteristics(these will serve as our predictor variables), accompanied with the result of each person being diagnosed as positive or negative to diabetes(this will be our target/response variable)
+
+The characteristics are  
+
+- pregnant (Number of times pregnant)  
+
+- glucose (Plasma glucose concentration in mg/dL)  
+
+- pressure (Diastolic blood pressure in mm Hg)  
+
+- triceps (Triceps skin fold thickness in mm)  
+
+- insulin (2-Hour serum insulin in mu U/ml)  
+
+- mass (Body Mass Index)  
+
+- pedigree (Special function that calculates ‘diabetes likelihood’ depending on medical family history)  
+
+- age (in years)  
+
+- diabetes (Factor indicating the diabetes test result as neg or pos)
+
+The objective is to develop a Machine Learning Model capable of predicting an individual’s likelihood of diabetes, based on these specific characteristics. The ultimate goal is to identify factors contributing to a positive diagnosis of diabetes. This knowledge can help in the development of several precaution measures, to prevent in best, or postpone in worst case scenario, this chronic metabolic disorder.
+
+## DATA UNDERSTANDING PHASE
+### Data Summary
+
+Loading the dataset and separating the predictor variables from the target variable. Storing them as ‘df’ and ‘diabetes’, respectively.
+Also creating a new variable named ‘y’, by transforming the categorical target variable to a binary numeric one. This will come in use later on, in the process of building the correlation matrix.
+```{r}
+library(mlbench)
+library(doParallel)
+doParallel::registerDoParallel(cores = 8)
+data("PimaIndiansDiabetes2")
+df <- PimaIndiansDiabetes2[ , -9]
+diabetes <- PimaIndiansDiabetes2[ , 9]
+y <- ifelse(diabetes=="pos", 1, 0)
+paged_table(df)
+```
+
+Checking the proportion of the two classes for the target variable, which are ‘pos’ for positive diagnosis and ‘neg’ for negative diagnosis. Almost 65% of ‘diabetes’ values are ‘neg’, and 35% ‘pos’. 
+We shall check our options about addressing class imbalance at the Data Preparation Phase.
+
+```{r}
+prop.pos <- sum(diabetes == "pos")/nrow(df)
+prop.neg <- sum(diabetes == "neg")/nrow(df)
+kable(data.frame('Proporion of Positive Class' = prop.pos,
+                 'Proportion of Negative Class' = prop.neg))
+```
+
+Inspecting the structure of the dataset, and extracting basic descriptive statistics for all independent variables
+```{r}
+library(modelsummary)
+datasummary_skim(df, output = "DT")
+```
+
+What we have at hand is a data frame of 8 predictor variables, all of them numeric. Having a look at the summary, we detect some anomalies present in the data. The minimum value of ‘glucose’ at 44 and for ‘pressure’ at 24, seem unrealistic.
+
+Also noticeable at first glance is the presence of missing values, most of them gathered at the variables ‘insulin’ and ‘triceps’. This issue will be further investigated at a later step.
+
+The next step involves visualizing the features to gain a deeper understanding of the data. We will plot histograms and density plots for each predictor variable to examine their distributions.
+
+### Data Visualization
+
+Preparing the dataset for visualization
+```{r}
+library(reshape2)
+meltedf <- melt(df)
+```
+
+Visualizing how independent variables are distributed via histograms
+```{r}
+library(ggplot2)
+ggplot(meltedf, aes(x = value)) + 
+ geom_histogram(bins = 9, color = "white",
+                fill = "#8A7FCD",
+                size = 0.5, alpha = 0.60) +
+ facet_wrap(~variable, scales = "free") +
+ theme_minimal() +
+ labs(title = "Histograms Grid", x = "Value", y = "Frequency")
+```
+
+Plotting the densities
+```{r}
+ggplot(meltedf, aes(x = value, fill = variable)) + 
+  geom_density(adjust = 1, fill = "#8A7FCD", alpha = 0.60) +
+  facet_wrap(~variable, scales = "free") +
+  theme_minimal() +
+  labs(title = "Density Distributions")
+```
+
+Viewing the plots gives us a sense of how the variables are distributed. ‘Mass’, ‘pressure’, and ‘triceps’ strongly resemble the Normal Distribution, while ‘age’ and the number of ‘pregnancies’ exhibit positive skewness, indicating a right-skewed distribution. ‘Glucose’ appears to have positive skewness as well. If we decide to apply any type of feature engineering, such as variable transformation or combining existing variables into a new one, the insights gained from these graphs will be valuable. These visualizations can guide our decisions, specifically in the case of a linear regression model where we need to assume normality, and if not, force it, via feature transformation.
+Another step in Data Understanding Phase is the inspection of any relations, linear or non-linear, simple or complex between the predictors. For the Inspection of co-linearity and multi-colinearity between predictors we proceed with the construction of the correlation matrix, visualizing it via a heatmap, and finally computing its eigenvalues.
+Given our goal to avoid making strong assumptions and increase uncertainty, we opt for Spearman’s correlation instead of Pearson’s coefficient.
+Spearman’s correlation is a non-parametric measure that does not assume linearity between the predictors, and checks for monotonic relationships, whether linear or nonlinear.
+
+However, it’s important to acknowledge that the presence of missing values unavoidably introduces uncertainty in our analysis. It is known that correlation coefficients cannot be computed in the presence of missing values. Therefore, in the variables with a big number of NA’s, the true relations may be hidden, especially in this dataset where, as we will see later the ‘missingness’ is very likely to occur Not At Random.
+
+```{r}
+library(ggcorrplot)
+correlation_matrix <- round(cor(data.frame(df, diabetes = y), use = "complete.obs", 
+                               method = "spearman"), 3)
+kable(correlation_matrix, caption = 'Correlations Matrix')
+
+ggcorrplot(correlation_matrix, colors = c("yellow", "white", "#8A7FCD"), 
+           show.diag = FALSE, lab = TRUE, lab_size = 2.8,
+           digits = 3, tl.cex = 10, title = "Correlations Matrix")
+
+eigen <- eigen(correlation_matrix)
+kable(data.frame(eigenvalues = eigen$values)) 
+kable(data.frame(kappa = kappa(correlation_matrix)))
+```
+
+From the above we derive that the relations are slightly weak, with a few exceptions of pairs, where the correlation is moderate to strong.
+These pairs appear sensible and can be derived without any specific domain knowledge.
+These pairs are, ‘glucose’ and ‘insulin’, ‘age’ and the number of ‘pregnancies’, and finally ‘triceps’ with ‘BMI’.
+As for the relations with respect to the target variable, the correlation between ‘glucose’ and ‘diabetes’ is the ‘strongest’ among all others.
+This indicates that in a successful modeling attempt, we should expect to see this relationship being influential.
+The eigenvalues of the matrix are quite spread out, with none of them very close to 1. This suggests that there isn’t one dominant pattern or direction in the data, and no single variable is highly correlated with all others.
+The kappa statistic computed at 11.596, can be characterized as rather medium, which indicates some level of multicollinearity, but not severe.
+Also, none of the eigen values is very close to 0, which indicates that none of the predictors can be considered as redundant.
+Taking into consideration the above results we do not have strong evidence to support a possible feature composition out of the existing ones, and risk any loss of information without significant benefit.
+
+## DATA PREPARATION PHASE
+
+In the Data preparation step we need to check for duplicate records, address the issue of outliers and missing values, and finally prepare the data by splitting it into train and test sets. Also as mentioned above we will not proceed with any feature engineering techniques(e.g. a new variable composition, or a variable transformation).
+
+### Checking for Near Zero Predictors
+
+Moving forward, we must check for near zero variance predictors. A near zero variance predictor can be safely considered as redundant and removed from the dataset before modelling, as it will provide little to no information to our model.
+In our sample no variable is found as near zero variance, and thus, we proceed using all variables from the set as predictors.
+```{r}
+library(caret)
+nzv <- nearZeroVar(df, saveMetrics = TRUE)
+kable(nzv)
+```
+
+### Checking for duplicate records
+```{r}
+duplicates <- df[duplicated(df), ]
+sum(duplicates)
+```
+No duplicate records were found in the set.
+
+### Addressing the issue of outliers
+
+A straightforward process is to visualize the boxplots for all predictors and observe the amount, as well as the values of outliers in the data.
+This method is a non-parametric method, and this means that no extra assumptions are made. In general, the lesser the assumptions the lesser the uncertainty.
+Nevertheless, at this step we will be forced to take some risks and make assumptions in order to handle the issue of outliers.
+Finally, we need to mention that the method of boxplots is most effective when applied in unimodal distributions, and from the densities we plotted earlier all variable distributions appear to be unimodal.
+From a quick view on the boxplot grid, we see that most of the outliers occur in the predictors which happen to gather most of the NA’S in the data. This can be an indication that the data is Not Missing At Random.
+These predictors are insulin and pedigree. It seems logical for these variables to gather most of the NA’s and outliers, since they are the most ‘technical’ and complex in their computation. These particular features are highly affected, and prone to instrumental errors, data entry errors and incorrect application of measurement procedures.
+
+- Predictor insulin is measured in mu U/ml, where mu stands for the Greek letter μ. Thus the maximum value of 846 mu U/ml when converted to miU/L corresponds to a value of approximately 121 mIU/L which according to present Domain Knowledge appears to be within the known-acknowledged range. For this reason, regardless of what appears as an outlier in the boxplot, no action will be taken.
+
+- For the ‘pedigree’ variable(a special function that calculates ‘diabetes likelihood’ given the medical family history) the range of values is from 0.0748 up to 2.42 which according to present Domain knowledge is the normal range of values, so in this case also, we will choose to leave these values intact.
+
+- In the ‘pressure’ predictor, which represents Diastolic blood pressure in mm Hg we observe values at the lower bound, below 40 which is also considered as unrealistic value. In this case, we choose to substitute these values with NA’s and treat them as missing values. Notice that no action will be taken for the values in the upper bound because a value of 122 mmHg for the Diastolic blood pressure is very commonly observed and that is why we shall not regard it as an outlier.
+
+- Triceps’ is another variable sensitive and strongly depended to a thorough procedure that must be applied for its measurement, and therefore it is prone to contain outliers and missing values. In this predictor and using present Domain Knowledge we observe values way above 40, values which are also considered unrealistic. We proceed with replacing these values with NA’s as well.
+
+- As for the other predictors, their values range is likely to be observed and for this reason we choose to accept them. For example in the mass feature(BMI) we observe a maximum value of 67.10 which is insanely high, but it has been observed in some occasions.
+
+```{r}
+ggplot(meltedf, aes(factor(variable), value)) +
+geom_boxplot(outlier.colour = '#8A7FCD', outlier.shape = 05, color = "#8A7FCD",
+                                                        fill = "white",) +
+  facet_wrap(~variable, scale="free") +
+  theme_minimal() +
+  labs(title = "Predictors Boxplots", x = "Predictor variable", y = "Values") 
+
+Pressure_Box <- boxplot(df$pressure, plot = FALSE)
+Pressure_Outliers <- Pressure_Box$out
+Pressure_Outliers <- subset(df$pressure, df$pressure <= 40)
+Pressure_Outliers
+df$pressure <- ifelse(df$pressure %in% Pressure_Outliers, NA, df$pressure)
+
+Triceps_Box <- boxplot(df$triceps, plot = FALSE)
+Triceps_Outliers <- Triceps_Box$out
+Triceps_Outliers
+df$triceps <- ifelse(df$triceps %in% Triceps_Outliers, NA, df$triceps)
+```
+
+### Addressing the issue of missing values
+
+We already commented on the missing values of the dataset, in the context of outliers but here we move one step forward, and as a first step, we extract descriptive statistics and a simple visualization of their occurrence.
+```{r}
+library(naniar)
+library(tidyverse)
+dim(df)
+pct_miss(df)
+pct_complete(df)
+n_miss(df)
+n_complete(df)
+kable(miss_var_summary(df))
+gg_miss_var(df, show_pct = TRUE)
+vis_miss(df, sort_miss = TRUE) +
+  scale_fill_manual(values = c("white", "#8A7FCD"))
+vis_miss(arrange(df, insulin), sort_miss = TRUE) +
+  scale_fill_manual(values = c("white", "#8A7FCD"))
+mcar_test_df <- mcar_test(df)
+mcar_test_df
+```
+
+The dataset is of dimension 768*9, and it has 10.61% NA’s. This means that 652 values are missing in a total of 6144 records. More than half of the values(53.6%) in the ‘insulin’ predictor are missing! 601 of NA’S are gathered only in 2 predictors. This translates to a 92% of NA’s concentrated in only 2 out of the 8 predictors, the ‘insulin’ and ‘triceps’ features, the measurement of which imposes several difficulties as commented earlier.
+An important derivation comes from visualizing the NA’s. It is clear that most of the missing values occur together. This is another indication that the missing values are very likely to occur Not At Random.
+Calling mcar_test(df), to perform a statistical test so as to infer if the missing values occur Completely At Random or not, returned a pretty high test statistic, with an extremely low p-value.
+This allows us, to reject the null hypothesis, since we have sufficient evidence to believe otherwise, that the values are Not Missing Completely At Random
+
+<u>Missing Not Completely At Random, or Missing Not At Random, is a complex and demanding case</u>
+
+- A simple removal of these records(Complete Case Analysis-CCA), will omit half of the dataset and almost certainly will distort the distributions and bias the resulting model.
+- Another approach is to impute the NA’S with parametric statistics such as the mean or the median of the corresponding predictor. However, this method may not be appropriate in the case of missing data not at random (MNAR).
+- Non-parametric imputation methods can also be applied, such as ‘knn’(k-nearest neighbors), ‘random forests’, ‘bagged trees’, or semi-parametric methods like ‘pmm’ (predictive mean matching). Many other methods are available, each with its own advantages and risks due to assumptions made.
+
+This is the point in which we have to highlight something that might be misunderstood regarding tree-based models. In general, we can leave the missing values in the data as is, and proceed with the implementation of a decision tree or an ensemble of trees for the classification task. Tree-based models can handle missing values to a reasonable extent, as they adapt to the nature of the data and make decisions on how to handle missing values locally at each node. Based on the available information and without requiring additional assumptions or imputation methods we can build a predictive model with descent performance both in terms of metrics like accuracy, sensitivity etc, as well as in terms of interpretability. But this is only in the case we deal with missing values Completely At Random, the ‘missingness’ extends to a reasonable level, and is spread out to all predictors, rather evenly
+
+In our case, where the missing values seem to happen Not At Random, and additionally, 92% of the total NA’s of the data frame are gathered in two predictors only, relying on the tree model to handle these NA’s will result in distorted predictor importance and interpretation.
+
+Moreover, the number of missing values slightly increased during the process of handling possible outliers, as some values were considered implausible, and converted to NA’s.
+This particular case will affect a tree-based model as well. For example, in our sample, leaving the NA’s being treated by the tree algorithm will lead to a model that might look ‘good’ in terms of performance metrics, but this is not the case considering the derivations and interpretations of the model. Taking the case of an ensemble of 250 decision trees(bagged trees), you might build a model with an AUC close to 0.90 and accuracy close to 0.85. However, these numbers alone do not capture the full picture, as our final goal extends beyond mere numerical performance metrics. It involves drawing meaningful conclusions from the model.
+
+In terms of interpretation, the model may erroneously indicate ‘insulin’ as a predictor with zero contribution to the formation of diabetes. Fact that of course according to present Domain Knowledge is not true. This is the effect of a variable having more than half of its values missing. In simple terms as more and more trees are built, the algorithm increasingly disregards ‘insulin’, due to its large proportion of NA’s, leading the contribution/importance of ‘insulin’ to vanish.
+
+In such cases, our best choice is to impute the data during the Data Preparation Phase, before modeling, as this will lead to more reliable results and derivations. For the imputation, we will use the mice() function, with the ‘rf’(Random Forest) method. This method is proved to be flexible, robust and reliable while at the same time we are not supposed to make any strong assumptions that have also to be verified.
+For example we can proceed with other predictive methods for the imputation, like ‘norm’, or ‘pmm’ method, but in this case we have to check for the linearity assumption that has to be met, and if not, we have to force it via feature engineering(e.g. a variable transformation).  
+By plotting the original variables ‘insulin’ and 'triceps', which ‘suffer’ the most from missing values, along with the imputed distributions, we can gain insight, about how well the imputation approximates the original distribution.
+
+```{r}
+library(mice)
+imputed_df <- mice(df, m = 1, method = "rf",  seed = 123, maxit = 3, print = FALSE)
+imputed_df <- complete(imputed_df, "all", include = TRUE)
+imputed_df <- as.data.frame(imputed_df[2])
+imputations <- data.frame(original_insulin = df$insulin,  
+                          imputed_insulin = imputed_df$X1.insulin,
+                          original_triceps = df$triceps,
+                          imputed_triceps = imputed_df$X1.triceps)
+imputations_long <- gather(imputations, method, value, factor_key = TRUE)
+
+ggplot(imputations_long, aes(x = value, color = method)) +
+  geom_density(aes(linetype = method), size = 1.2, na.rm = TRUE) +
+  scale_color_manual(values = c("original_insulin" = "yellow", 
+                                "imputed_insulin" = "#8A7FCD")) +
+  scale_linetype_manual(values = c("original_insulin" = "solid", 
+                                   "imputed_insulin" = "dotted")) +
+  labs(x = "Value", y = "Density") +
+  coord_cartesian(xlim = c(0, 900), ylim = c(0,0.0055)) +
+  theme_minimal() +
+  theme(legend.text = element_text(color = "#8A7FCD", face = "bold"))
+
+ggplot(imputations_long, aes(x = value, color = method)) +
+  geom_density(aes(linetype = method), size = 1.2, na.rm = TRUE) +
+  scale_color_manual(values = c("original_triceps" = "yellow", 
+                                "imputed_triceps" = "#8A7FCD")) +
+  scale_linetype_manual(values = c("original_triceps" = "solid", 
+                                   "imputed_triceps" = "dotted")) +
+  labs(x = "Value", y = "Density") +
+  coord_cartesian(xlim = c(0, 60), ylim = c(0,0.040)) +
+  theme_minimal() +
+  theme(legend.text = element_text(color = "#8A7FCD", face = "bold")) 
+
+```
+
+From the plot, we see that the ‘rf’ imputation method fits adequately to the original data distribution.
+
+We extract the summary for imputation and compare it with the original data distribution, in case we spot any significant deviations.
+We also check if the imputed values deviate from the known-established range of values according to Present Domain Knowledge.
+
+```{r}
+datasummary_skim(data.frame(imputed_df$X1.insulin, df$insulin, imputed_df$X1.triceps,
+                            df$triceps), output = "DT")
+```
+	
+Last move to assess how well the imputation matches the original data, is to perform a non-parametric statistical test.
+We proceed with 'Kolmogorov-Smirnov' test, where the Null Hypothesis is that the imputed distribution is drawn from the original data, or in other words, the imputed distribution has no difference from the original data distribution.
+
+```{r}
+ks.test(df$insulin, imputed_df$X1.insulin, alternative = "two.sided", 
+                              exact = TRUE,
+        simulate.p.value = TRUE)
+
+ks.test(df$triceps, imputed_df$X1.triceps, alternative = "two.sided", 
+        exact = TRUE,
+        simulate.p.value = TRUE)
+
+```
+
+The results are promising since for both variables, we fail to reject the null hypothesis.  
+That is, the imputed distribution does not significantly differ from the original data.
+The test statistics, and the p-values from the tests, indicate that the difference in the distributions is minor, and the high p-value allows us to proceed with the imputation, feeling pretty safe.  
+*Please note that a mean or median imputation would be inappropriate in this context. A simple plot, comparing the distribution of imputed values against the original data, would make this point obvious.*
+
+### Preparing the datasets
+
+We reach the final step of Data Preparation Phase, where we split the imputed data into a train and a test set. The test set will be kept out and used solely for the evaluation of our model.
+Since we are working on a dataset with only a few records, a valid choice is the 80-20 split, so as to have ‘enough’ records to train our model, and let it uncover/discover the patterns of the data and the nature of its features.  
+We are making sure that the sampling is ‘stratified’ with respect to the target variable ‘diabetes’.  
+We have already mentioned the imbalance of the classes for the target variable. Almost 65% of the patients are diagnosed negative to diabetes, and 35% as positive.  
+More specifically we have 500 records of 'negative' cases, and 268 for positive ones.  
+Choosing Undersampling may not be a viable option in our case due to the small size of the dataset. Disregarding a significant portion of the data through undersampling would not only distort the underlying data distribution. and reduce the amount of information available for modeling, but also potentially introduce bias and lead to poor generalization.  
+After undersampling we will be left with just 536 records. 268 records for each class of the target variable. Throwing in the garbage 232 records out of a 768 total, seems irrational.
+On the other hand, choosing to oversample the minority class to balance the target variable also imposes certain challenges.  
+Synthetic samples are generated for the minority class to balance the dataset, but these samples may not fully capture the true underlying distribution of the data.  
+As a result, there is a risk of introducing bias in the model, particularly if the synthetic samples do not accurately represent the characteristics of the minority.  
+Despite its challenges, oversampling the minority class offers several benefits in addressing class imbalance.  
+By increasing the representation of the minority class, oversampling ensures that the model receives sufficient training data to learn from the less frequent class, thereby improving its ability to make accurate predictions for both classes.  
+Additionally, oversampling helps prevent the model from being biased towards the majority  and may enhance its overall performance metrics, such as accuracy, sensitivity, and specificity.  
+Furthermore, oversampling techniques like Synthetic Minority Over-sampling Technique (SMOTE) or Adaptive Synthetic Sampling (ADASYN), can generate artificial samples that closely resemble the characteristics of the minority class, thereby minimizing <u>to an extent</u>, the risk of introducing bias or overfit the model.  
+<u>We will proceed with modeling, using both the original unbalanced dataset and a balanced(oversampled) one, and observe any differences on the results.</u>  
+One very important note on the procedure of the balanced dataset option, is that we will balance only the train set for model training and keep the evaluation/test set intact with the target variable imbalanced.  
+By training the model on a balanced dataset and evaluating it on an imbalanced test set, we create a more realistic simulation of how the model will perform in real-world scenarios where class distributions are uneven.  
+This approach helps ensure that the model learns to make predictions that generalize well to unseen data with imbalanced class distributions.
+The final evaluation on 'unseen' data reflects the model's ability to generalize to real-world scenarios, making the evaluation more unbiased and reliable.  
+Last move is to create the folds(data splits), to be used for the cross-validation inside the model. Considering the ‘tiny’ size of the sample, 5 folds will be our choice, but keep in mind that in general, for larger datasets a common choice for the number of folds is 10.
+
+
+```{r}
+library(tidymodels)
+library(UBL)
+set.seed(123)
+df$diabetes <- diabetes
+imputed_df$diabetes <- diabetes
+colnames(imputed_df) <- colnames(df)
+df_split <- initial_split(imputed_df, prop = 4/5, strata = diabetes)
+train <- training(df_split)
+test <- testing(df_split)
+balanced_train <- AdasynClassif(diabetes~., train, beta = 1, k = 3, 
+                                dist = "Euclidean")
+nrow(subset(test, diabetes == "pos"))/nrow(test)
+nrow(subset(train, diabetes == "pos"))/nrow(train)
+nrow(subset(balanced_train, diabetes == "pos"))/nrow(balanced_train)
+nrow(subset(balanced_train, diabetes == "neg"))/nrow(balanced_train)
+folds <- vfold_cv(train, v = 5, strata = diabetes)
+balanced_folds <- vfold_cv(balanced_train, v = 5, strata = diabetes)
+
+```
+
+## MODEL & EVALUATION PHASE
+### Decision Tree
+[Decision tree](https://scikit-learn.org/stable/modules/tree.html#) is a fundamental machine learning technique used for both classification and regression tasks. They operate by recursively partitioning the data into subsets based on the values of the input features in the data that are used as predictors, forming a tree-like structure of decision rules. The root of the tree(root node) initially contains all data elements. Each internal node of the tree represents a decision based on a feature, leading to different branches corresponding to different feature values. At the leaf nodes(the nodes at the bottom of the dendrogram), the model provides its predictions or class labels. Decision trees offer interpretability, as the resulting tree structure can be easily visualized and understood, while they can also handle data inconsistencies to a reasonable extent. Despite their simplicity, decision trees can capture complex relationships in the data and are a popular choice for predictive modeling tasks. However, they are sensitive to over-fitting and high variability.
+[Tidymodels](https://www.tidymodels.org/) will be our choice for modelling, with the ‘rpart’ algorithm.
+<u>A small brief about how the ‘rpart’ algorithm operates</u>
+[RPART](https://cran.r-project.org/web/packages/rpart/rpart.pdf) stands for Recursive Partitioning. The process is a recursive binary splitting of the data in such a way that several criteria/conditions, set by the user are met.
+- We begin at the root node where all data points/elements of the dataset exist
+- The algorithm in the initial split searches for the best filtering in any of the predictor variables that splits the set in two groups while at the same time meeting a specific condition/criterion that is set by the user. The user can choose for the split to be made in such a way that the data impurity/data entropy within the 2 formed groups is minimized or moving in the opposite direction but with the same scope, in such a way that the maximum possible information is gained in both subsets.
+
+- The splitting process continues recursively the same way, in both subsets created by the initial split while at the same time, the splitting criterion has to be met.(either the optimal minimization of data entropy or the optimal maximization of information gained).
+
+- The splitting process continues until it is stopped by conditions defined by the user. Such conditions can be the maximum depth of the tree has been reached, or the minimum number of data points/records a node must contain.
+
+- After the process is complete and the tree is fully grown, the algorithm may cut branches that increase the complexity of the tree without significantly improving its performance.
+
+- Using the formed paths from the root to the leaf nodes at the bottom, the model provides its predictions
+
+We use `decision_tree()` function to build the model.  
+We set the parameters for the depth of the tree, and the minimum number of records to be contained in a node, to be tuned so as to search in multiple combinations of values, for the search of the best among them, while setting the complexity parameter cp, fixed at 0.02. Adjusting cp parameter helps us to manage the complexity of the tree. Lower levels for the cp parameter will lead to an overgrown tree and larger values to a simpler, pruned tree. Setting the parameter at a reasonable level will result in a more easily interpretable, intuitive tree graph, and less prone to over-fitting.
+Our algorithm choice will be ‘rpart’ and as the splitting criterion we choose ['information” gain'](https://homes.cs.washington.edu/~shapiro/EE596/notes/InfoGain.pdf)  
+We use a recipe in which we take care of the slight imbalance in the classes of the target variable. We feed the workflow of the process with the model and the recipe, define the folds for the cross-validation process, and the grid of different combinations for the values of the parameters.  
+All these are used inside the `tune_grid()` function for the tuning process to be performed and the best model in terms of performance is extracted and fit in the test set for evaluation.  
+Setting the argument ‘levels’ to 10 inside the `grid_regular()` function, so as to define how many values of each parameter will be used to produce the grid. Having 2 parameters to tune and 10 possible values for each, results in 100 different possible tuning combinations, from which the model will choose the best, ‘performance wise’.
+Using `select_best()` extracts the best tuned model in terms of performance and the final model is ready.
+The process ends with the evaluation of the model.
+We extract the predictions on the test set, the construction of the confusion matrix, the ROC curve, and the performance metrics.
+An important note, is that before the evaluation on the test set, a good practice is to assess the performance on the folds of the training set using `fit_resamples()` and `collect_metrics()`. If the performance metrics on the training set are significantly higher than those on the test set (unseen data), this discrepancy may indicate that the model is overfitting.  
+
+- <u>Original/Unbalanced approach</u>
+```{r}
+library(rpart)
+library(rpart.plot)
+library(pROC)
+set.seed(123)
+decision_tree <- decision_tree(
+                          cost_complexity = 0.02,
+                          tree_depth = tune(),
+                          min_n = tune()
+                                        ) %>%
+                          set_mode("classification") %>%
+                          set_engine(engine = "rpart", 
+                                     parms = list(split = "information"))
+
+tree_recipe <- recipe(data = train, formula = diabetes~.)
+
+tree_workflow <- workflow() %>%
+                  add_recipe(tree_recipe) %>%
+                  add_model(decision_tree) 
+               
+tree_parameters_grid <- grid_regular(parameters(decision_tree), levels = 10)
+
+tree_tune_process <- tune_grid(tree_workflow,
+                          resamples = folds,
+                          grid = tree_parameters_grid,
+                          metrics = metric_set(roc_auc))
+
+autoplot(tree_tune_process)
+
+tree_best_process <-  select_best(tree_tune_process, metric = 'roc_auc')
+
+best_tree <- finalize_model(decision_tree, tree_best_process)
+best_tree
+
+resamples_fit <- fit_resamples(best_tree, diabetes ~ ., 
+                               resamples = folds)
+collect_metrics(resamples_fit)
+
+tree_best_fit <- fit(best_tree, diabetes~., train)
+tree_best_fit
+
+tree_pred.classes <- predict(tree_best_fit, test, type = "class")
+tree_pred.classes <- factor(unlist(tree_pred.classes))
+tree_confusion_matrix <- confusionMatrix(data = tree_pred.classes, 
+                                         reference = test$diabetes, 
+                                         positive = "pos")
+
+tree_confusion_matrix
+
+fourfoldplot(tree_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+rpart.plot(tree_best_fit$fit, extra = 101, under = TRUE, box.palette = "auto", 
+           tweak = 1.20, roundint = FALSE)
+
+tree_probabilities <- predict(tree_best_fit, test, type = "prob")
+tree_curve <- roc(test$diabetes, tree_probabilities$.pred_pos)
+plot.roc(tree_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+tree_auc <- auc(tree_curve)
+"AUC" -> names(tree_auc)
+tree_accuracy <- tree_confusion_matrix$overall['Accuracy']
+tree_sensitivity <- tree_confusion_matrix$byClass['Sensitivity']
+tree_specificity <- tree_confusion_matrix$byClass['Specificity']
+tree_precision <- tree_confusion_matrix$byClass[5]
+tree_performance_metrics <- c(tree_auc, tree_accuracy, tree_sensitivity, 
+                              tree_specificity, 
+                              tree_precision)
+
+tree_performance_metrics
+
+tree_Var_Importance <- tree_best_fit$fit$variable.importance
+tree_Var_Importance <- (tree_Var_Importance/sum(tree_Var_Importance))*100
+tree_Var_Importance <- data.frame(tree_Var_Importance)
+tree_Var_Importance <- data.frame(Variable =rownames(tree_Var_Importance),
+                                  Importance = tree_Var_Importance$tree_Var_Importance)
+
+ggplot(tree_Var_Importance, aes(x = Importance, y = reorder(Variable, Importance))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) +
+  geom_text(aes(label = round(Importance, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+  labs(x = "Importance", y = "Variable") + 
+  xlim(0,55) +
+  theme_minimal()
+```
+
+- <u>Balanced/Oversampled approach</u>
+```{r}
+library(rpart)
+library(rpart.plot)
+library(pROC)
+set.seed(123)
+balanced_decision_tree <- decision_tree(
+                          cost_complexity = 0.02,
+                          tree_depth = tune(),
+                          min_n = tune()
+                                        ) %>%
+                          set_mode("classification") %>%
+                          set_engine(engine = "rpart", 
+                                     parms = list(split = "information"))
+
+balanced_tree_recipe <- recipe(data = balanced_train, formula = diabetes~.)
+
+balanced_tree_workflow <- workflow() %>%
+                  add_recipe(balanced_tree_recipe) %>%
+                  add_model(balanced_decision_tree) 
+               
+balanced_tree_parameters_grid <- grid_regular(parameters(balanced_decision_tree), levels = 10)
+
+balanced_tree_tune_process <- tune_grid(balanced_tree_workflow,
+                          resamples = balanced_folds,
+                          grid = balanced_tree_parameters_grid,
+                          metrics = metric_set(roc_auc))
+
+autoplot(balanced_tree_tune_process)
+
+balanced_tree_best_process <-  select_best(balanced_tree_tune_process, metric = 'roc_auc')
+
+balanced_best_tree <- finalize_model(balanced_decision_tree, balanced_tree_best_process)
+balanced_best_tree
+
+balanced_resamples_fit <- fit_resamples(balanced_best_tree, diabetes ~ ., 
+                               resamples = balanced_folds)
+collect_metrics(balanced_resamples_fit)
+
+balanced_tree_best_fit <- fit(balanced_best_tree, diabetes~., balanced_train)
+balanced_tree_best_fit
+
+balanced_tree_pred.classes <- predict(balanced_tree_best_fit, test, type = "class")
+balanced_tree_pred.classes <- factor(unlist(balanced_tree_pred.classes))
+balanced_tree_confusion_matrix <- confusionMatrix(data = balanced_tree_pred.classes, 
+                                         reference = test$diabetes, 
+                                         positive = "pos")
+
+balanced_tree_confusion_matrix
+
+fourfoldplot(balanced_tree_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+rpart.plot(balanced_tree_best_fit$fit, extra = 101, under = TRUE, box.palette = "auto", 
+           tweak = 1.20, roundint = FALSE)
+
+balanced_tree_probabilities <- predict(balanced_tree_best_fit, test, type = "prob")
+balanced_tree_curve <- roc(test$diabetes, balanced_tree_probabilities$.pred_pos)
+plot.roc(balanced_tree_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+balanced_tree_auc <- auc(balanced_tree_curve)
+"AUC" -> names(balanced_tree_auc)
+balanced_tree_accuracy <- balanced_tree_confusion_matrix$overall['Accuracy']
+balanced_tree_sensitivity <- balanced_tree_confusion_matrix$byClass['Sensitivity']
+balanced_tree_specificity <- balanced_tree_confusion_matrix$byClass['Specificity']
+balanced_tree_precision <- balanced_tree_confusion_matrix$byClass[5]
+balanced_tree_performance_metrics <- c(balanced_tree_auc, balanced_tree_accuracy,   
+balanced_tree_sensitivity, balanced_tree_specificity, balanced_tree_precision)
+
+balanced_tree_performance_metrics
+
+balanced_tree_Var_Importance <- balanced_tree_best_fit$fit$variable.importance
+balanced_tree_Var_Importance <- (balanced_tree_Var_Importance /
+                                 sum(balanced_tree_Var_Importance))*100
+balanced_tree_Var_Importance <- data.frame(balanced_tree_Var_Importance)
+balanced_tree_Var_Importance <- data.frame(
+                              Variable=rownames(balanced_tree_Var_Importance),
+                              Importance =     
+                                balanced_tree_Var_Importance$balanced_tree_Var_Importance)
+
+ggplot(balanced_tree_Var_Importance, aes(x = Importance, y = reorder(Variable, Importance))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) +
+  geom_text(aes(label = round(Importance, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+  labs(x = "Importance", y = "Variable") + 
+  xlim(0,35) +
+  theme_minimal()
+```
+
+
+One last and very important thing to note has to do with the variability of the model’s performance. At the final step of Data Preparation, we split the data into training and test sets. We used the `set.seed()` function to make the results reproducible, and eliminate the effect of randomness in the data split which is more amplified by the fact that we work in a tiny dataset with just a few records. The randomness of cross-validation is also eliminated. We should expect that different data sets and data folds, will also lead to different results in the auto-tuning process for the hyperparameters of the model, and this also contributes, in the variability of the final model.
+Not choosing the `set.seed()` will result in models with variability in their performance. For example, you may end up with a model, having the AUC metric in a value-range from approximately 0.70 up to 0.85 (at least those were my results in multiple runs I performed). Note that this randomness leads also to variability in the final interpretation of the model when you extract the importance of the predictors on the formation of the target variable.
+This is also the reason why we get a model that performs much better on the evaluation set than on the folds of the train set. Choosing a different `set.seed()`, can lead us to a model which does not generalize very well on 'unseen' data.
+This is probably one of the disadvantages of decision trees. The high variance on the resulting models.
+This effect of model variability is what we will try to mitigate in our next modelling attempt, where we shall use an ensemble of multiple trees. A statistical method known as Bootstrap aggregating.
+Bagged trees are an ensemble of decision trees, where the final tree is the result of their combination. As you can imagine Bagged trees, by averaging predictions from multiple trees trained on different subsets of the data, tend to reduce variability in the final model performance, compared to individual decision trees.
+
+
+### Bagged Decision Trees
+[Bagged decision trees](https://en.wikipedia.org/wiki/Bootstrap_aggregating), or Bootstrap Aggregated Trees, is an ensemble learning technique that combines the predictions of multiple decision trees to enhance predictive accuracy and reduce variance. Using bootstrap sampling, multiple decision trees with identical configuration are trained on different subsets of the data, with their predictions being aggregated to produce a final output.  
+This data variation used in the ensemble makes the model more robust to unseen data and can generalize better than a single decision tree. As an aggregation of multiple decision trees, the final output of this ensemble is no longer a single tree, and thus its complexity cannot be easily interpreted. However, this is of no concern, since the main goal of bagged trees is to improve the performance of the model, reduce its variability and make it more robust.
+For the implementation of our bagged tree model, we shall set the number of decision trees to grow, to 100, while keeping the complexity parameter(cp) fixed at 0.02.
+We also set the tree depth at 5, to avoid increasing the complexity of the model and therefore mitigate the effect of 'overfitting' to a reasonable extent.
+
+- <u>Original/Unbalanced approach</u>
+```{r}
+library(baguette)
+set.seed(123)
+bag_tree <- bag_tree(
+                     min_n = tune(),
+                     tree_depth = 5,
+                     cost_complexity = 0.02,     
+                                        ) %>%
+                      set_engine('rpart', times = 100,
+                                 parms = list(split = 'information')) %>%
+                      set_mode('classification')
+
+bag_recipe <- recipe(data = train, formula = diabetes~.) 
+
+bag_parameters_grid <- grid_regular(parameters(bag_tree), levels = 10)
+
+bag_workflow <- workflow() %>%
+                add_recipe(bag_recipe) %>%
+                add_model(bag_tree)
+
+bag_tune_process <- tune_grid(bag_workflow,
+                               resamples = folds,
+                               grid = bag_parameters_grid,
+                               metrics = metric_set(roc_auc))
+
+autoplot(bag_tune_process)
+
+bag_best_process <- select_best(bag_tune_process, metric = 'roc_auc')
+best_bag <- finalize_model(bag_tree, bag_best_process)
+best_bag
+
+resamples_fit <- fit_resamples(best_bag, diabetes ~ ., 
+                               resamples = folds)
+collect_metrics(resamples_fit)
+
+bag_best_fit <- fit(best_bag, diabetes~., train)
+bag_best_fit
+
+bag_pred.classes <- predict(bag_best_fit, test, type = "class")
+bag_pred.classes <- factor(unlist(bag_pred.classes))
+bag_confusion_matrix <- confusionMatrix(data = bag_pred.classes, 
+                                reference =  test$diabetes, positive = "pos")
+bag_confusion_matrix
+
+fourfoldplot(bag_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+bag_probabilities <- predict(bag_best_fit, test, type = "prob")
+bag_curve <- roc(test$diabetes, bag_probabilities$.pred_pos)
+plot.roc(bag_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+bag_auc <- auc(bag_curve)
+"bag_AUC" -> names(bag_auc)
+bag_accuracy <- bag_confusion_matrix$overall['Accuracy']
+bag_sensitivity <- bag_confusion_matrix$byClass['Sensitivity']
+bag_specificity <- bag_confusion_matrix$byClass['Specificity']
+bag_precision <- bag_confusion_matrix$byClass[5]
+bag_performance_metrics <- c(bag_auc, bag_accuracy, bag_sensitivity, 
+                             bag_specificity, 
+                              bag_precision)
+
+bag_performance_metrics
+
+bag_Var_Imp <- bag_best_fit$fit$imp[, 1:2]
+bag_Var_Imp$value <- (bag_Var_Imp$value/
+                             sum(bag_Var_Imp$value))*100
+                                                                  
+ggplot(bag_Var_Imp, aes(x = value, y =  reorder(term, value))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) + 
+  geom_text(aes(label = round(value, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+  labs(x = "Importance", y = "Variable") + 
+  xlim(0,50) +
+  theme_minimal() 
+```
+
+- <u>Balanced/Oversampled approach</u>
+```{r}
+library(baguette)
+set.seed(123)
+balanced_bag_tree <- bag_tree(
+                     min_n = tune(),
+                     tree_depth = 5,
+                     cost_complexity = 0.02,     
+                                        ) %>%
+                      set_engine('rpart', times = 100,
+                                 parms = list(split = 'information')) %>%
+                      set_mode('classification')
+
+balanced_bag_recipe <- recipe(data = balanced_train, formula = diabetes~.) 
+
+balanced_bag_parameters_grid <- grid_regular(parameters(balanced_bag_tree), levels = 10)
+
+balanced_bag_workflow <- workflow() %>%
+                add_recipe(balanced_bag_recipe) %>%
+                add_model(balanced_bag_tree)
+
+balanced_bag_tune_process <- tune_grid(balanced_bag_workflow,
+                               resamples = balanced_folds,
+                               grid = balanced_bag_parameters_grid,
+                               metrics = metric_set(roc_auc))
+
+autoplot(balanced_bag_tune_process)
+
+balanced_bag_best_process <- select_best(balanced_bag_tune_process, metric = 'roc_auc')
+balanced_best_bag <- finalize_model(balanced_bag_tree, balanced_bag_best_process)
+balanced_best_bag
+
+balanced_resamples_fit <- fit_resamples(balanced_best_bag, diabetes ~ ., 
+                               resamples = balanced_folds)
+collect_metrics(balanced_resamples_fit)
+
+balanced_bag_best_fit <- fit(balanced_best_bag, diabetes~., balanced_train)
+balanced_bag_best_fit
+
+balanced_bag_pred.classes <- predict(balanced_bag_best_fit, test, type = "class")
+balanced_bag_pred.classes <- factor(unlist(balanced_bag_pred.classes))
+balanced_bag_confusion_matrix <- confusionMatrix(data = balanced_bag_pred.classes, 
+                                reference =  test$diabetes, positive = "pos")
+balanced_bag_confusion_matrix
+
+fourfoldplot(balanced_bag_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+balanced_bag_probabilities <- predict(balanced_bag_best_fit, test, type = "prob")
+balanced_bag_curve <- roc(test$diabetes, balanced_bag_probabilities$.pred_pos)
+plot.roc(balanced_bag_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+balanced_bag_auc <- auc(balanced_bag_curve)
+"bag_AUC" -> names(balanced_bag_auc)
+balanced_bag_accuracy <- balanced_bag_confusion_matrix$overall['Accuracy']
+balanced_bag_sensitivity <- balanced_bag_confusion_matrix$byClass['Sensitivity']
+balanced_bag_specificity <- balanced_bag_confusion_matrix$byClass['Specificity']
+balanced_bag_precision <- balanced_bag_confusion_matrix$byClass[5]
+balanced_bag_performance_metrics <- c(balanced_bag_auc, balanced_bag_accuracy, balanced_bag_sensitivity, balanced_bag_specificity, balanced_bag_precision)
+
+balanced_bag_performance_metrics
+
+balanced_bag_Var_Imp <- balanced_bag_best_fit$fit$imp[, 1:2]
+balanced_bag_Var_Imp$value <- (balanced_bag_Var_Imp$value/
+                             sum(balanced_bag_Var_Imp$value))*100
+                                                                  
+ggplot(balanced_bag_Var_Imp, aes(x = value, y =  reorder(term, value))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) + 
+  geom_text(aes(label = round(value, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+  labs(x = "Importance", y = "Variable") + 
+  xlim(0,30) + 
+  theme_minimal() 
+```
+
+
+### Random Forest
+
+[Random Forest](https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm) is a special case of bagging trees. It is a powerful ensemble learning algorithm that combines the strengths of decision trees with the principles of bagging and feature subsampling. The forest consists of multiple decision trees that are built with the same settings, but this time during the ‘growing’ process of each individual tree, at every node the split process takes into account only a random subset of the predictors/features. Also, the datasets used for each tree are different from each other and come from a bootstrap sampling of the original training data.  
+Therefore, the algorithm of Random Forests following this procedure achieves two important things at the same time. Firstly, the trees are de-correlated from each other and so the variability/variance is minimized, making the model more robust to unseen data and at the same time using different subsets of predictors in each step of the tree creation, the bias of the result is reduced, since it does not become heavily dependent to any specific set of predictors.  
+We can set this manually via the ‘mtry’ parameter. The mtry parameter controls the number of predictors sampled at each split when building each tree in the forest. By limiting the number of predictors considered at each split, you can reduce the complexity of the trees and mitigate the effect of overfitting. A general rule of thumb for setting ‘mtry’ is the square root of the total number of predictors, and this is what we will use in our model also.  
+In our case we will set ‘mtry’ to 3. This means, that at every node of the tree, 3 out of 8 total predictors, will be randomly selected for the splitting process. The maximum number of trees we can grow in the forest is 2000. However, in an attempt to reduce the computational costs, and the risk of overfitting the model, we will proceed with a forest of 500 trees. 
+
+- <u>Original/Unbalanced approach</u>
+```{r}
+library(ranger)
+set.seed(123)
+forest <- rand_forest(
+                      mtry = 3,
+                      trees = 500, 
+                      min_n = tune()
+                                      ) %>%
+                      set_engine("ranger", num.threads = 8,
+                       splitrule = "gini", importance = "impurity_corrected") %>%
+                      set_mode('classification')
+
+forest_recipe <- recipe(data = train, formula = diabetes~.)
+  
+forest_parameters <- extract_parameter_set_dials(forest) %>%
+                      finalize(train)
+
+forest_grid <- grid_regular(forest_parameters$object, levels = 10)
+
+forest_workflow <- workflow() %>%
+                    add_recipe(forest_recipe) %>%
+                    add_model(forest)
+
+tune_forest <- tune_grid(forest_workflow,
+                         resamples = folds,
+                         grid = forest_grid,
+                         metrics = metric_set(roc_auc))
+
+autoplot(tune_forest)
+
+forest_best_process <- select_best(tune_forest, metric = 'roc_auc')
+best_forest <- finalize_model(forest, forest_best_process)
+best_forest
+
+resamples_fit <- fit_resamples(best_forest, diabetes ~ ., 
+                               resamples = folds)
+collect_metrics(resamples_fit)
+
+forest_best_fit <- fit(best_forest, diabetes~., train)
+forest_best_fit
+
+forest_pred.classes <- predict(forest_best_fit, test, type = "class")
+forest_pred.classes <- factor(unlist(forest_pred.classes))
+forest_confusion_matrix <- confusionMatrix(forest_pred.classes, test$diabetes, 
+                                        positive = "pos")
+forest_confusion_matrix
+
+fourfoldplot(forest_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+forest_probabilities <- predict(forest_best_fit, test, type = "prob")
+forest_curve <- roc(test$diabetes, forest_probabilities$.pred_pos)
+plot.roc(forest_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+forest_auc <- auc(forest_curve)
+"forest_AUC" -> names(forest_auc)
+forest_accuracy <- forest_confusion_matrix$overall['Accuracy']
+forest_sensitivity <- forest_confusion_matrix$byClass['Sensitivity']
+forest_specificity <- forest_confusion_matrix$byClass['Specificity']
+forest_precision <- forest_confusion_matrix$byClass[5]
+forest_performance_metrics <- c(forest_auc, forest_accuracy, 
+                                forest_sensitivity, 
+                                forest_specificity, forest_precision)
+
+forest_performance_metrics
+
+forest_Var_Imp <- forest_best_fit$fit$variable.importance
+forest_Var_Imp <- data.frame(forest_Var_Imp)
+term <- rownames(forest_Var_Imp) 
+value <- forest_Var_Imp$forest_Var_Imp
+forest_Var_Imp <- data.frame(term, value)
+
+forest_Var_Imp$value <- (forest_Var_Imp$value/sum(forest_Var_Imp$value))*100
+
+ggplot(forest_Var_Imp, aes(x = value, y =  reorder(term, value))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) + 
+  geom_text(aes(label = round(value, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+  labs(x = "Importance", y = "Variable") +
+  xlim(0,50) + 
+   theme_minimal()
+```
+
+- <u>Balanced/Oversampled approach</u>
+```{r}
+library(ranger)
+set.seed(123)
+balanced_forest <- rand_forest(
+                      mtry = 3,
+                      trees = 500, 
+                      min_n = tune()
+                                      ) %>%
+                      set_engine("ranger", num.threads = 8,
+                       splitrule = "gini", importance = "impurity_corrected") %>%
+                      set_mode('classification')
+
+balanced_forest_recipe <- recipe(data = balanced_train, formula = diabetes~.)
+  
+balanced_forest_parameters <- extract_parameter_set_dials(balanced_forest) %>%
+                      finalize(balanced_train)
+
+balanced_forest_grid <- grid_regular(balanced_forest_parameters$object, levels = 10)
+
+balanced_forest_workflow <- workflow() %>%
+                    add_recipe(balanced_forest_recipe) %>%
+                    add_model(balanced_forest)
+
+balanced_tune_forest <- tune_grid(balanced_forest_workflow,
+                         resamples = balanced_folds,
+                         grid = balanced_forest_grid,
+                         metrics = metric_set(roc_auc))
+
+autoplot(balanced_tune_forest)
+
+balanced_forest_best_process <- select_best(balanced_tune_forest, metric = 'roc_auc')
+balanced_best_forest <- finalize_model(balanced_forest, balanced_forest_best_process)
+balanced_best_forest
+
+balanced_resamples_fit <- fit_resamples(balanced_best_forest, diabetes ~ ., 
+                               resamples = balanced_folds)
+collect_metrics(balanced_resamples_fit)
+
+balanced_forest_best_fit <- fit(balanced_best_forest, diabetes~., balanced_train)
+balanced_forest_best_fit
+
+balanced_forest_pred.classes <- predict(balanced_forest_best_fit, test, type = "class")
+balanced_forest_pred.classes <- factor(unlist(balanced_forest_pred.classes))
+balanced_forest_confusion_matrix <- confusionMatrix(balanced_forest_pred.classes, test$diabetes, 
+                                        positive = "pos")
+balanced_forest_confusion_matrix
+
+fourfoldplot(balanced_forest_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+balanced_forest_probabilities <- predict(balanced_forest_best_fit, test, type = "prob")
+balanced_forest_curve <- roc(test$diabetes, balanced_forest_probabilities$.pred_pos)
+plot.roc(balanced_forest_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+balanced_forest_auc <- auc(balanced_forest_curve)
+"forest_AUC" -> names(balanced_forest_auc)
+balanced_forest_accuracy <- balanced_forest_confusion_matrix$overall['Accuracy']
+balanced_forest_sensitivity <- balanced_forest_confusion_matrix$byClass['Sensitivity']
+balanced_forest_specificity <- balanced_forest_confusion_matrix$byClass['Specificity']
+balanced_forest_precision <- balanced_forest_confusion_matrix$byClass[5]
+balanced_forest_performance_metrics <- c(balanced_forest_auc, balanced_forest_accuracy, 
+                                balanced_forest_sensitivity, 
+                                balanced_forest_specificity, balanced_forest_precision)
+
+balanced_forest_performance_metrics
+
+balanced_forest_Var_Imp <- balanced_forest_best_fit$fit$variable.importance
+balanced_forest_Var_Imp <- data.frame(balanced_forest_Var_Imp)
+term <- rownames(balanced_forest_Var_Imp) 
+value <- balanced_forest_Var_Imp$balanced_forest_Var_Imp
+balanced_forest_Var_Imp <- data.frame(term, value)
+
+balanced_forest_Var_Imp$value <- (balanced_forest_Var_Imp$value/sum(balanced_forest_Var_Imp$value))*100
+
+ggplot(balanced_forest_Var_Imp, aes(x = value, y =  reorder(term, value))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) + 
+  geom_text(aes(label = round(value, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+  labs(x = "Importance", y = "Variable") +
+  xlim(0,30) + 
+   theme_minimal()
+```
+
+
+### Gradient Boosted Trees
+[Gradient Boosted Trees](https://www.machinelearningplus.com/machine-learning/an-introduction-to-gradient-boosting-decision-trees/) is a machine learning technique that creates a series of decision trees forming an ensemble.
+Each tree depends on the results of previous trees, and all trees produced through this process, are combined to produce a final prediction and create a ‘boosted’ version of predictive model.
+‘GBT’ works by sequentially adding decision trees to the ensemble, with each tree aiming to correct the errors made by the previous ones.
+The sequential nature of GBT involves adding trees one at a time, with each subsequent tree aiming to improve upon the predictions of the previous trees in the series.
+This is done by focusing on the minimization of a loss function (such as mean squared error for regression or data-entropy for classification) using the [gradient descent algorithm](https://builtin.com/data-science/gradient-descent).
+Another way to put it and make it more concrete, is that every tree in the sequence is grown after the other and attempts to reduce the misclassification rate, meaning that the consequent tree is built upon the basis of giving higher weights to the misclassified points of its antecedents.
+While on the ensemble methods we saw earlier like bagged trees, and random forest, where each tree in the ensemble was built independently and then combined, in ‘GBT’ each tree derives as an improvement of its antecedents. In other words each tree tries to learn from the mistakes(prediction errors) made from the previous trees on the series. As for the data on which the algorithm is applied, the original dataset of predictors(no bootstrapping here), remains unchanged throughout the whole process while the column with the target variable is constantly being modified in a way to depict the errors made from the antecedent trees of the ensemble, and which aims to correct/minimize.
+You can choose to grow each tree in the series using the whole original data set, or a random sample of it. Exactly like in the case of a random forest, in the ‘GBT’ algorithm, you can random sample the number of predictors used for the grow of the tree, via the mtry parameter.
+In our presentation we use the [XGboost](https://xgboost.readthedocs.io/en/stable/), algorithm, and details about its parameterization via parnsip are here.
+One important thing to mention is that the time required to train a ‘GBT’ model and tune its parameters depends on several factors, including the size of the dataset, the complexity of the model, the number of hyperparameters being tuned, and the computational resources available(such as CPU speed, RAM and GPU availability).
+An attempt to tune all possible hyperparameters of the model, even in a small dataset can last ‘forever’, especially if you can’t enable gpu support for the XGBoost algorithm.
+You need to experiment, especially with the parameters of the gradient descent algorithm applied, to minimize the loss function.  
+
+Here are some general rules you can follow in order to build the model, while keeping a balance between computational costs, model performance and avoid a possible overfit of the model.  
+- trees  
+trees refer to the number of trees in the model. Increasing the value can improve the model performance, but can also lead to overfitting and increase training time  
+- tree_depth  
+The tree_depth parameter controls the maximum depth of the trees in the model. A larger max_depth value results in more complex models, which can lead to overfitting  
+- min_n  
+The minimum number of data points in a node that is required for the node to be split further. Smaller numbers of data points in a node, will lead to more complex trees and therefore, increase the risk of overfitting the model  
+- mtry  
+The number of predictors randomly sampled at each split when creating each tree. Like in the case of a random forest, constraining the number of predictors considered at each split, you can reduce the complexity of the trees and mitigate the effect of overfitting  
+- loss_reduction  
+The minimum value for the loss function to achieve, so as the tree will further grow with further splits. This parameter helps control the complexity of the tree by ensuring that splits are only made when they result in a sufficiently significant improvement in the model's performance, therefore helping to prevent overfitting
+- learn_rate  
+The step size taken at the gradient descent towards the local minimum(the min value for the loss function). Lower steps will lead to slower times for the algorithm to converge but also to a more accurate model   
+- sample_size  
+a proportion of random sample from the data, used per tree building iteration. This can improve the generalization fo the model, thus reduces the risk of a potential overfit and also reduces the time nedded for training the model  
+- stop_iter  
+The number of iterations without improvement before stopping. A bigger number will lead to more time needed for the algorithm to converge, and increase the chance of overfitting
+
+- <u>Original/Unbalanced approach</u>
+```{r}
+library(xgboost)
+set.seed(123)
+boost_spec <- boost_tree(
+                trees = 500,
+                tree_depth = tune(), 
+                min_n = tune(), 
+                mtry = 3,
+                loss_reduction = 2.25,  
+                learn_rate = 0.01,
+                sample_size = 0.80,
+                stop_iter = 3) %>%
+                set_engine('xgboost', nthread = 8, importance = TRUE) %>%
+                set_mode('classification')
+
+boost_parameters <- extract_parameter_set_dials(boost_spec) %>%
+                                  finalize(train) 
+
+boost_grid <- grid_regular(boost_parameters$object, levels = 10)
+
+boost_recipe <- recipe(formula = diabetes ~ ., data = train) 
+
+boost_workflow <- workflow() %>% 
+                  add_recipe(boost_recipe) %>% 
+                  add_model(boost_spec)  
+
+tune_boost <- tune_grid(boost_workflow,
+                         resamples = folds,
+                         grid = boost_grid,
+                         metrics = metric_set(roc_auc))
+
+autoplot(tune_boost)
+
+boost_best_process <- select_best(tune_boost, metric = 'roc_auc')
+
+best_boost <- finalize_model(boost_spec, boost_best_process)
+best_boost
+
+resamples_fit <- fit_resamples(best_boost, diabetes ~ ., 
+                               resamples = folds)
+collect_metrics(resamples_fit)
+
+boost_best_fit <- fit(best_boost, diabetes~., train)
+boost_pred.classes <- predict(boost_best_fit, test, type = "class")
+boost_pred.classes <- factor(unlist(boost_pred.classes))
+boost_confusion_matrix <- confusionMatrix(data = boost_pred.classes, 
+                                        reference = test$diabetes, positive = "pos")
+boost_confusion_matrix
+                                          
+fourfoldplot(boost_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+boost_probabilities <- predict(boost_best_fit, test, type = "prob")
+boost_curve <- roc(test$diabetes, boost_probabilities$.pred_pos)
+plot.roc(boost_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+boost_auc <- auc(boost_curve)
+"boost_AUC" -> names(boost_auc)
+boost_accuracy <- boost_confusion_matrix$overall['Accuracy']
+boost_sensitivity <- boost_confusion_matrix$byClass['Sensitivity']
+boost_specificity <- boost_confusion_matrix$byClass['Specificity']
+boost_precision <- boost_confusion_matrix$byClass[5]
+boost_performance_metrics <- c(boost_auc, boost_accuracy, 
+                                boost_sensitivity, 
+                                boost_specificity, boost_precision)
+
+boost_performance_metrics
+
+boost_importance <- xgb.importance(boost_best_fit$fit$feature_names, boost_best_fit$fit)
+
+boost_Var_Imp <- data.frame(boost_importance$Feature, boost_importance$Gain)
+
+ggplot(boost_Var_Imp, aes(x = boost_importance$Gain*100, 
+                               y =  reorder(boost_importance$Feature,
+                                            boost_importance$Gain))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) + 
+  geom_text(aes(label = round(boost_importance$Gain*100, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+   labs(x = "Importance", y = "Variable") + 
+  xlim(0,55) +
+   theme_minimal() 
+```
+
+- <u>Balanced/Oversampled approach</u>
+```{r}
+library(xgboost)
+set.seed(123)
+balanced_boost_spec <- boost_tree(
+                trees = 500,
+                tree_depth = tune(), 
+                min_n = tune(), 
+                mtry = 3,
+                loss_reduction = 2.25,  
+                learn_rate = 0.01,
+                sample_size = 0.80,
+                stop_iter = 3) %>%
+                set_engine('xgboost', nthread = 8, importance = TRUE) %>%
+                set_mode('classification')
+
+balanced_boost_parameters <- extract_parameter_set_dials(balanced_boost_spec) %>%
+                                  finalize(balanced_train) 
+
+balanced_boost_grid <- grid_regular(balanced_boost_parameters$object, levels = 10)
+
+balanced_boost_recipe <- recipe(formula = diabetes ~ ., data = balanced_train) 
+
+balanced_boost_workflow <- workflow() %>% 
+                  add_recipe(balanced_boost_recipe) %>% 
+                  add_model(balanced_boost_spec)  
+
+balanced_tune_boost <- tune_grid(balanced_boost_workflow,
+                         resamples = balanced_folds,
+                         grid = balanced_boost_grid,
+                         metrics = metric_set(roc_auc))
+
+autoplot(balanced_tune_boost)
+
+balanced_boost_best_process <- select_best(balanced_tune_boost, metric = 'roc_auc')
+
+balanced_best_boost <- finalize_model(balanced_boost_spec, balanced_boost_best_process)
+best_boost
+
+balanced_resamples_fit <- fit_resamples(balanced_best_boost, diabetes ~ ., 
+                               resamples = balanced_folds)
+collect_metrics(balanced_resamples_fit)
+
+balanced_boost_best_fit <- fit(balanced_best_boost, diabetes~., balanced_train)
+balanced_boost_pred.classes <- predict(balanced_boost_best_fit, test, type = "class")
+balanced_boost_pred.classes <- factor(unlist(balanced_boost_pred.classes))
+balanced_boost_confusion_matrix <- confusionMatrix(data = balanced_boost_pred.classes, 
+                                        reference = test$diabetes, positive = "pos")
+balanced_boost_confusion_matrix
+                                          
+fourfoldplot(balanced_boost_confusion_matrix$table, color = c("#8F9FCD", "#8A7FCD"))
+
+balanced_boost_probabilities <- predict(balanced_boost_best_fit, test, type = "prob")
+balanced_boost_curve <- roc(test$diabetes, balanced_boost_probabilities$.pred_pos)
+plot.roc(balanced_boost_curve, print.auc = TRUE, auc.polygon = TRUE, asp = 0.50,
+         grid = TRUE, identity.lty = 2, identity.lwd = 1, print.thres = TRUE,
+         auc.polygon.col= rgb(0.1,0.1,1, alpha = 0.3), legacy.axes = TRUE,
+         xlab = "FPR", ylab = "TPR", print.thres.cex = 0.7,
+         print.auc.cex = 0.9)
+
+balanced_boost_auc <- auc(balanced_boost_curve)
+"boost_AUC" -> names(balanced_boost_auc)
+balanced_boost_accuracy <- balanced_boost_confusion_matrix$overall['Accuracy']
+balanced_boost_sensitivity <- balanced_boost_confusion_matrix$byClass['Sensitivity']
+balanced_boost_specificity <- balanced_boost_confusion_matrix$byClass['Specificity']
+balanced_boost_precision <- balanced_boost_confusion_matrix$byClass[5]
+balanced_boost_performance_metrics <- c(balanced_boost_auc, balanced_boost_accuracy, 
+                                balanced_boost_sensitivity, 
+                                balanced_boost_specificity, boost_precision)
+
+balanced_boost_performance_metrics
+
+balanced_boost_importance <- xgb.importance(balanced_boost_best_fit$fit$feature_names, balanced_boost_best_fit$fit)
+
+balanced_boost_Var_Imp <- data.frame(balanced_boost_importance$Feature, balanced_boost_importance$Gain)
+
+ggplot(balanced_boost_Var_Imp, aes(x = balanced_boost_importance$Gain*100, 
+                               y =  reorder(balanced_boost_importance$Feature,
+                                            balanced_boost_importance$Gain))) +
+  geom_bar(stat = "identity", fill = "#8A7FCD", alpha = 0.75) + 
+  geom_text(aes(label = round(balanced_boost_importance$Gain*100, 2)), size = 3,
+            hjust = -0.2, color = "#8A7FCD") +
+   labs(x = "Importance", y = "Variable") + 
+  xlim(0,25) + 
+   theme_minimal() 
+```
+
+
+## COMMENTS & CONCLUSIONS
+```{r}
+table_performance <- data.frame(tree = round(tree_performance_metrics, 2),
+                            balanced_tree = round(balanced_tree_performance_metrics, 2),
+                            bagging = round(bag_performance_metrics, 2),
+                            balanced_bagging = round(balanced_bag_performance_metrics, 2),
+                            forest = round(forest_performance_metrics, 2),  
+                            balanced_forest = round(balanced_forest_performance_metrics, 2),
+                            boosted = round(boost_performance_metrics, 2),
+                            balanced_boosted = round(balanced_boost_performance_metrics, 2))
+
+kable(table_performance, "html") %>%
+  kable_styling(font_size = 13)
+
+```
+
+Looking closely at the performance metrics of the table, we see that all models performed reasonably well. The overall performance of the gradient boosted model was slightly better, with all other models not far behind. We should note that such a result was expected, since it is very common for boosted algorithms to handle better class imbalance.
+The decision tree model, despite its simplicity and small computational costs, performed surprisingly well, with the most balanced overall performance. This highlights the robustness of decision trees in capturing complex patterns within the data, despite its simplicity.  
+The most noticeable thing comes when we observe the Sensitivity metric.  
+While all models did a good job in terms of classifying a negative patient correctly(this is what the specificity metric captures), this is not the case in terms of classifying correctly the positive patients(this is what the sensitivity metric captures).  
+It is very likely that the reason for this is the class imbalance in the target variable.  
+Having the positive cases as the minority class, the model struggles to capture all positive cases correctly and at the same time having the negative class as the majority, makes it easier for the model to correctly classify the negative clients.
+This is a common scenario where the model tends to be biased towards the majority class. In our practice on the original imbalanced dataset, out of 54 positive patients in the test(unseen data) set, the decision tree model lost 12 ‘positive’ patients by classifying them as ‘negative’, the bagged model lost 23, the random forest 19 and the boosted model 24.  
+In such tasks(medical cases) not losing a single ‘positive’ record by wrongly classifying it as ‘negative’, is crucial.  
+In this context, our modeling attempt was not so successful.  
+When handling the class imbalance in the target variable via oversampling the minority, we achieved increasing the sensitivity of all models, except for the Decision Tree model.  
+Specifically in the case of a decision tree the number of misclassified positive patients increased from 12 to 13, while in the bagged tree model fell from 23 to 12, in the forest model from 19 to 12 and finally in the boosted model fell from 24 to 13.  
+So, in terms of improving the sensitivity, the oversampling approach was a success, **but that came with a cost**.  
+While we achieved an increase in true positive cases, false negative cases increased also. While focusing on increasing the True Positives, the number of false negatives also increased.  
+This trade-off led to a decrease in specificity and precision metrics, as the model may became more prone to misclassifying negative cases as positive.  
+It is very likely that in our attempt to balance the target variable, we overfitted to some extent the minority class, leading to a slightly biased model towards the positive cases.
+This is the crucial point where we must find the ‘right balance’ according to the needs of our project, also known as the 'precision-recall trade-off'.  
+Another important observation is that after upsampling the data, the variables importance was also altered, and predictors that initially were depicted as having a minor impact on the outcome, after upsampling their contribution was reinforced. Maybe this is true, or maybe this result is biased from the upsampling appied.  This is another impact of the uncertainty introduced, when deciding to upsample the minority(*which is of great interest*), with artificial records.  
+Maybe the most reliable method should not be to face the class imbalance directly, and possibly introduce bias in the model, or overfit it.  
+<u>Instead, our focus should probably be on observing and collecting more data. A general rule of thumb is that feeding the model with more 'clean' and relevant to the problem data, will make it more robust and reliable.</u>  
+Also noticeable during the modeling process is that in all models the performance on the test set was much better than the performance on the folds of the train set.  
+This does not mean that we have built a ‘super’ model. On the contrary, the most probable explanation is the data randomness, which is further amplified by the tiny size of the dataset. It is important to note that altering the random seed using set.seed(), would result in different data splits and consequently, varying outcomes.  
+Closing this practice project, we should go back to the Project understanding Phase and revisit what our ultimate purpose was.  
+All this process serves as a tool that can help us derive valuable conclusions about the problem defined during the Project Understanding Phase.  
+In our practice our goal was to find and weight the contributing factors that could lead a person to be diagnosed positive with diabetes. The extracted variable importance from the final fitted models on the original imbalanced data, shows that the most influential factor that contributes the most to this chronic, metabolic disease, is by far the levels of ‘glucose’.  
+This predictor along with ‘BMI’, ‘age’ and ‘insulin’, contributed more than 80% to the formation of a positive outcome. Finally, according to the models, medical family history(‘pedigree’), number of pregnancies, skin fold thickness(‘triceps’) and 'pressure' appear to have a minor effect on the outcome.
+
+## FINAL NOTE
+
+This was my first attempt in the ML Domain, and I’ll be happy if you share any comments and proposals.
+For the construction of this project, the following books and web sources guided me through the whole process,  
+* [Guide to Intelligent Data Analysis](https://link.springer.com/book/10.1007/978-1-84882-260-3)  
+* [Data Science Big Data Analytics - 2015 - EMC Education Services](https://www.wiley.com/en-us/Data+Science+and+Big+Data+Analytics%3A+Discovering%2C+Analyzing%2C+Visualizing+and+Presenting+Data-p-9781118876138)  
+* [An Introduction to Statistical Learning](https://www.statlearning.com/)  
+* [R for Data Science](https://r4ds.had.co.nz/)  
+* [Tidy Modeling with R](https://www.tmwr.org/)  
+* [Julia Silge YouTube channel](https://www.youtube.com/@JuliaSilge)  
+* [TidyX YouTube channel](https://www.youtube.com/@TidyX_screencast)
+
