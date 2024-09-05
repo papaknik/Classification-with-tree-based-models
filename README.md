@@ -14,7 +14,7 @@ The objective of this project is to develop a machine learning model capable of 
 
 ## Challenges
 
-One of the main challenges encountered in this practice is the high ratio of missing values, which during the project was found to be **Not At Random**.
+"One of the main challenges encountered in this practice is the high ratio of missing values, which, during the project, was found to occur not at random."
 
 ## Methodology
 
