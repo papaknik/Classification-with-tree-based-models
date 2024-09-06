@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-In this small practice project, we perform data analysis on the `PimaIndiansDiabetes2` dataset, which is available with the R package **mlbench**. 
+In this practice project, we perform data analysis on the `PimaIndiansDiabetes2` dataset, which is available with the R package **mlbench**. 
 This dataset includes:
 - **768** female Indian patients above 21 years old.
 - **Eight** individual characteristics (predictor variables).
